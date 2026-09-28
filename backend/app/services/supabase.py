@@ -88,6 +88,17 @@ class SupabaseService:
         if response.status_code >= 400:
             raise SupabaseError(f"Image upload failed ({response.status_code})")
 
+    async def remove_files(self, paths: list[str]) -> None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.request(
+                "DELETE",
+                f"{self.url}/storage/v1/object/{self.bucket}",
+                json={"prefixes": paths},
+                headers=self.headers,
+            )
+        if response.status_code >= 400:
+            raise SupabaseError(f"Image deletion failed ({response.status_code})")
+
     async def signed_url(self, path: str, expires_in: int = 3600) -> str:
         encoded_path = quote(path, safe="/")
         async with httpx.AsyncClient(timeout=30) as client:

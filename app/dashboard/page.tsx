@@ -26,10 +26,19 @@ interface HistoryItem {
   createdAt: string;
 }
 
+interface ServerHistoryItem extends GeneratedContent {
+  record_id: string;
+  image_url: string;
+  platform: string;
+  tone: string;
+  created_at: string;
+}
+
 /* ─── Constants ─── */
 const PLATFORMS = ["Instagram", "Facebook", "TikTok", "LinkedIn", "Pinterest"];
 const TONES = ["Professional", "Luxury", "Friendly", "Trendy", "Playful", "Minimalist"];
 const LANGUAGES = ["English", "French", "Arabic", "Spanish", "German"];
+const HISTORY_STORAGE_KEY = "sparkle_history";
 
 const RESULT_LABELS: { key: keyof GeneratedContent; icon: string; label: string; color: string }[] = [
   { key: "title",       icon: "🏷️", label: "Product Title",       color: "from-purple-500/10 to-transparent" },
@@ -127,22 +136,59 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setMounted(true);
-    const saved = localStorage.getItem("sparkle_history");
-    if (!saved) return;
-    try {
-      const savedHistory = JSON.parse(saved) as HistoryItem[];
-      setHistory(savedHistory);
-      const restoredItem = savedHistory.find(
-        (item) => item.result.record_id && item.result.image_url
-      ) ?? savedHistory[0];
+    const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
+    let cancelled = false;
+
+    const restore = (items: HistoryItem[]) => {
+      if (cancelled) return;
+      setHistory(items);
+      const restoredItem = items[0];
       if (restoredItem) {
         setResult(restoredItem.result);
         setSelectedHistoryId(restoredItem.id);
+        setImage(restoredItem.imagePreview);
       }
-    } catch {
-      localStorage.removeItem("sparkle_history");
+    };
+
+    if (saved) {
+      try {
+        restore(JSON.parse(saved) as HistoryItem[]);
+      } catch {
+        localStorage.removeItem(HISTORY_STORAGE_KEY);
+      }
     }
-  }, []);
+
+    const loadSupabaseHistory = async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const response = await fetch("/api/history", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const rows = (await response.json()) as ServerHistoryItem[];
+        const durableHistory = rows.map((row) => ({
+          id: row.record_id,
+          imagePreview: row.image_url,
+          platform: row.platform,
+          tone: row.tone,
+          result: row,
+          createdAt: new Date(row.created_at).toLocaleString(),
+        }));
+        restore(durableHistory);
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(durableHistory));
+      } catch {
+        // Keep the most recent browser cache when the backend is unavailable.
+      }
+    };
+
+    void loadSupabaseHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken]);
 
   /* ── Image upload ── */
   const handleFile = useCallback((f: File) => {
@@ -175,16 +221,35 @@ export default function DashboardPage() {
 
   const viewHistoryItem = (item: HistoryItem) => {
     setResult(item.result);
+    setImage(item.imagePreview);
     setSelectedHistoryId(item.id);
     requestAnimationFrame(() => {
       resultSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
 
-  const deleteHistoryItem = (id: string) => {
+  const deleteHistoryItem = async (id: string) => {
+    const item = history.find((entry) => entry.id === id);
+    if (item?.result.record_id) {
+      try {
+        const token = await getToken();
+        if (!token) throw new Error("Your session has expired.");
+        const response = await fetch(`/api/history/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || "Could not delete this history item.");
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Could not delete this history item.");
+        return;
+      }
+    }
     const updated = history.filter((item) => item.id !== id);
     setHistory(updated);
-    localStorage.setItem("sparkle_history", JSON.stringify(updated));
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
     if (selectedHistoryId === id) {
       setSelectedHistoryId(null);
       setResult(null);
@@ -232,8 +297,9 @@ export default function DashboardPage() {
       setSelectedHistoryId(null);
 
       /* Save to history */
+      const historyId = data.record_id || Date.now().toString();
       const newItem: HistoryItem = {
-        id: Date.now().toString(),
+        id: historyId,
         imagePreview: data.image_url || image!,
         platform,
         tone,
@@ -242,7 +308,7 @@ export default function DashboardPage() {
       };
       const updated = [newItem, ...history].slice(0, 10);
       setHistory(updated);
-      localStorage.setItem("sparkle_history", JSON.stringify(updated));
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Generation failed. Please try again.");
     } finally {

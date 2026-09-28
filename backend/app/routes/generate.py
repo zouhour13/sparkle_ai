@@ -1,13 +1,13 @@
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ..config import Settings, get_settings
-from ..schemas import GeneratedContent
+from ..schemas import GeneratedContent, GeneratedHistoryItem
 from ..security import CurrentUser, current_user
 from ..services.generation import generate_marketing_content, normalize_jpeg
 from ..services.supabase import SupabaseError, SupabaseService
@@ -16,6 +16,75 @@ from ..services.supabase import SupabaseError, SupabaseService
 router = APIRouter(tags=["generation"])
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 logger = logging.getLogger(__name__)
+
+
+@router.get("/history", response_model=list[GeneratedHistoryItem])
+async def history(
+    user: CurrentUser = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    db = SupabaseService(settings)
+    try:
+        rows = await db.query(
+            "generated_content",
+            params={
+                "user_id": f"eq.{user.id}",
+                "select": (
+                    "id,platform,tone,title,description,caption,cta,hashtags,"
+                    "publish_storage_path,created_at"
+                ),
+                "order": "created_at.desc",
+                "limit": "10",
+            },
+        )
+        return [
+            {
+                "record_id": row["id"],
+                "platform": row["platform"],
+                "tone": row["tone"],
+                "title": row["title"],
+                "description": row["description"],
+                "caption": row["caption"],
+                "cta": row["cta"],
+                "hashtags": row["hashtags"],
+                "image_url": await db.signed_url(
+                    row["publish_storage_path"], expires_in=86400
+                ),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+    except (SupabaseError, httpx.HTTPError) as exc:
+        logger.warning("Generated history could not be loaded: %s", exc)
+        raise HTTPException(status_code=503, detail="History is temporarily unavailable.") from exc
+
+
+@router.delete("/history/{record_id}", status_code=204)
+async def delete_history_item(
+    record_id: UUID,
+    user: CurrentUser = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    db = SupabaseService(settings)
+    try:
+        row = await db.one(
+            "generated_content",
+            {"id": f"eq.{record_id}", "user_id": f"eq.{user.id}"},
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="History item not found.")
+        await db.remove_files(
+            [row["original_storage_path"], row["publish_storage_path"]]
+        )
+        await db.delete(
+            "generated_content",
+            {"id": f"eq.{record_id}", "user_id": f"eq.{user.id}"},
+        )
+    except HTTPException:
+        raise
+    except (SupabaseError, httpx.HTTPError) as exc:
+        logger.warning("Generated history item could not be deleted: %s", exc)
+        raise HTTPException(status_code=503, detail="History item could not be deleted.") from exc
 
 
 @router.post("/generate", response_model=GeneratedContent)
@@ -69,7 +138,7 @@ async def generate(
             },
         )
         result["record_id"] = row["id"]
-        result["image_url"] = await db.signed_url(publish_path, expires_in=3600)
+        result["image_url"] = await db.signed_url(publish_path, expires_in=86400)
     except (SupabaseError, httpx.HTTPError) as exc:
         logger.warning("Generated content could not be persisted: %s", exc)
     return result

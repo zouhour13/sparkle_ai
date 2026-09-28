@@ -27,6 +27,12 @@ class GeneratedContent(BaseModel):
     image_url: str | None = None
 
 
+class GeneratedHistoryItem(GeneratedContent):
+    platform: str
+    tone: str
+    created_at: datetime
+
+
 class ConnectResponse(BaseModel):
     authorization_url: str
 
