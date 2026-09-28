@@ -75,6 +75,21 @@ npm run dev
 
 Open `http://localhost:3000`, sign in, generate content, and use **Post to social media**. Meta cannot fetch media from localhost, but it can fetch the short-lived HTTPS URL generated from Supabase Storage.
 
+## Docker
+
+Docker runs the Next.js frontend and FastAPI backend together; Supabase remains the managed database and Storage service.
+
+1. Copy `.env.example` to `.env.local` and `backend/.env.example` to `backend/.env`, then set the real credentials.
+2. Start the stack, making the browser-safe Clerk values available for the frontend build:
+
+```powershell
+docker compose --env-file .env.local up --build
+```
+
+Open `http://localhost:3000`. The frontend calls the backend over Docker's internal `backend:8000` network address, while port `8000` is also exposed for the OAuth callback during local testing.
+
+For Instagram or Facebook OAuth in a deployed environment, set `FRONTEND_URL`, `INSTAGRAM_REDIRECT_URI`, and `FACEBOOK_REDIRECT_URI` in `backend/.env` to your public HTTPS domain and register those exact callback URLs with Meta. A temporary tunnel can be used locally, but a deployed HTTPS domain is required for reliable publishing.
+
 ## API
 
 All application endpoints except OAuth callbacks require a Clerk bearer token.
