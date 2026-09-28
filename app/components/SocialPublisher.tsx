@@ -71,9 +71,16 @@ export default function SocialPublisher({ content, imagePreview }: { content: Pu
     void loadData().catch(() => undefined);
     const params = new URLSearchParams(window.location.search);
     const oauthError = params.get("social_error");
+    const connectedProvider = params.get("social_connected");
     if (oauthError) setError(oauthError);
-    if (params.has("social_connected")) void loadData();
-  }, [loadData]);
+    if (connectedProvider) {
+      setError("");
+      void loadData();
+    }
+    if (oauthError || connectedProvider) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+    }
+  }, [api, loadData]);
 
   useEffect(() => {
     if (!job || !["pending", "processing"].includes(job.status)) return;
@@ -86,7 +93,7 @@ export default function SocialPublisher({ content, imagePreview }: { content: Pu
         .catch((err: Error) => setError(err.message));
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [job, loadData]);
+  }, [api, job, loadData]);
 
   const selected = useMemo(
     () => accounts.find((account) => account.id === selectedAccount),

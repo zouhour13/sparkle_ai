@@ -49,6 +49,16 @@ async def connect(
     social: SocialService = Depends(service),
 ):
     state = new_state()
+    # A new connection attempt supersedes only unfinished OAuth requests.
+    # It never touches the user's saved social account.
+    await social.db.delete(
+        "oauth_states",
+        {
+            "user_id": f"eq.{user.id}",
+            "provider": f"eq.{provider.value}",
+            "consumed_at": "is.null",
+        },
+    )
     await social.db.insert(
         "oauth_states",
         {
