@@ -1,12 +1,11 @@
-import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 
 const FASTAPI_URL = process.env.FASTAPI_URL || "http://localhost:8000";
 
 export async function POST(req: NextRequest) {
-  // 1. Auth check
-  const { userId } = await auth();
-  if (!userId) {
+  // The browser obtains a short-lived Clerk token; FastAPI verifies it.
+  const authorization = req.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) {
     return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
   }
 
@@ -42,6 +41,7 @@ export async function POST(req: NextRequest) {
     const response = await fetch(`${FASTAPI_URL}/generate`, {
       method: "POST",
       body: formData,
+      headers: { Authorization: authorization },
     });
 
     if (!response.ok) {
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           detail:
-            "AI backend is not running. Please start the FastAPI server: cd sparkle-backend && uvicorn main:app --reload",
+            "AI backend is not running. Configure backend/.env, then run: cd backend && .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload",
         },
         { status: 503 }
       );

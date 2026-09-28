@@ -1,262 +1,110 @@
 # Sparkle AI
 
-Sparkle AI is a full-stack marketing content generator for product images. Users upload a product photo, choose a target platform and tone, and receive a ready-to-use content package with a headline, description, social caption, call to action, and hashtags.
-
-The project combines a Next.js dashboard, a FastAPI AI backend, Hugging Face models, Clerk authentication, and Supabase persistence/export tooling.
-
-## Features
-
-- Product image upload with preview, drag-and-drop support, and file validation.
-- Platform-aware copy generation for Instagram, Facebook, TikTok, and ecommerce.
-- Tone presets: professional, luxury, friendly, trendy, playful, and minimalist.
-- AI image captioning with BLIP.
-- Text generation through Hugging Face Inference API, with local TinyLlama fallback.
-- Clerk-protected dashboard and API proxy routes.
-- Supabase Storage for uploaded product images.
-- Supabase history table for generated content.
-- History browsing, deletion, and one-click reuse.
-- CSV, Excel, and ZIP exports.
-- Export translation support for English, French, Arabic, and Spanish.
-- Dark/light theme support.
+Sparkle AI turns product photos into marketing copy and can publish the generated image, caption, and hashtags to Instagram professional accounts and Facebook Pages.
 
 ## Architecture
 
-```text
-Sparkle_AI/
-|-- sparkle-ai/          # Next.js frontend and authenticated API proxy
-|   |-- app/
-|   |   |-- page.tsx             # Landing page
-|   |   |-- dashboard/page.tsx   # Main generator dashboard
-|   |   |-- pricing/page.tsx     # Pricing screen
-|   |   |-- login/               # Clerk sign-in page
-|   |   |-- signup/              # Clerk sign-up page
-|   |   `-- api/                 # Next.js proxy routes to FastAPI
-|   `-- package.json
-|
-`-- sparkle-backend/     # FastAPI backend
-    |-- main.py                  # App entry point, CORS, router setup
-    |-- config.py                # Environment-based settings
-    |-- routes/                  # Generate, history, and export endpoints
-    |-- schemas/                 # Pydantic request/response models
-    |-- services/                # AI, Supabase, translation, export services
-    |-- tests/                   # Backend tests
-    |-- schema.sql               # Supabase database schema
-    `-- requirements.txt
-```
+- `app/`: Next.js 16 frontend, Clerk authentication, and authenticated backend proxies.
+- `backend/app/`: FastAPI generation, OAuth, account management, and publishing API.
+- `backend/supabase/migrations/`: Postgres schema, RLS lockdown, and private Storage bucket setup.
+- Clerk is the only user identity provider. FastAPI validates Clerk session JWTs.
+- Supabase is accessed only by FastAPI with a server-side service key. Meta tokens are encrypted before storage.
 
-## Tech Stack
+## Supported publishing
 
-| Layer | Technology |
-| --- | --- |
-| Frontend | Next.js 16, React 19, TypeScript |
-| Styling | Tailwind CSS v4 |
-| Authentication | Clerk |
-| Backend | FastAPI, Python, Uvicorn |
-| Validation | Pydantic v2 |
-| Image AI | Salesforce BLIP image captioning |
-| Text AI | Zephyr-7B via Hugging Face Inference API, TinyLlama fallback |
-| Database | Supabase Postgres |
-| Storage | Supabase Storage |
-| Exports | CSV, Excel, ZIP |
-| Testing | Pytest |
+- Instagram Business and Creator accounts through Instagram Login.
+- Facebook Pages for which the connected user has the `CREATE_CONTENT` task.
+- Single-image posts. Instagram images are normalized to JPEG and served to Meta through a short-lived Supabase signed URL.
 
-## Prerequisites
+Personal Instagram accounts, Facebook personal profiles, carousels, Reels, Stories, and scheduling are not supported in this release.
 
-- Node.js 20 or newer
-- Python 3.11 or newer
-- A Clerk project
-- A Supabase project
-- A Hugging Face account and token, recommended for faster text generation
+## Configuration
 
-## Environment Variables
+Copy `.env.example` to `.env.local` for Next.js. Copy `backend/.env.example` to `backend/.env` for FastAPI.
 
-### Frontend
-
-Create `sparkle-ai/.env.local`:
-
-```env
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_your_clerk_publishable_key
-CLERK_SECRET_KEY=sk_test_your_clerk_secret_key
-NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login
-NEXT_PUBLIC_CLERK_SIGN_UP_URL=/signup
-FASTAPI_URL=http://localhost:8000
-```
-
-### Backend
-
-Create `sparkle-backend/.env`:
-
-```env
-HF_TOKEN=hf_your_hugging_face_token
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=your_supabase_service_role_key
-SUPABASE_STORAGE_BUCKET=product-images
-HOST=0.0.0.0
-PORT=8000
-DEBUG=false
-```
-
-Keep `SUPABASE_SERVICE_KEY` server-side only. Do not expose it in the frontend.
-
-## Supabase Setup
-
-1. Open your Supabase project.
-2. Go to SQL Editor.
-3. Run the schema in `sparkle-backend/schema.sql`.
-4. The backend will attempt to create the `product-images` public storage bucket on startup.
-
-The backend writes generated content to the `history` table and uploads product images to Supabase Storage when Supabase credentials are configured.
-
-## Installation
-
-Install frontend dependencies:
+Generate the token encryption key once and keep it stable and secret:
 
 ```powershell
-cd sparkle-ai
-npm install
+python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
 ```
 
-Install backend dependencies:
+Never expose `SUPABASE_SERVICE_KEY`, `SOCIAL_TOKEN_ENCRYPTION_KEY`, Meta app secrets, or access tokens through `NEXT_PUBLIC_*` variables.
+
+## Supabase setup
+
+Apply `backend/supabase/migrations/202609220001_social_publishing.sql` to the target Supabase project. It creates:
+
+- `generated_content`
+- `social_accounts`
+- `oauth_states`
+- `social_publish_jobs`
+- A private `product-images` Storage bucket
+
+The migration enables RLS and revokes browser-role access. The application backend additionally filters every record by the verified Clerk user ID.
+
+## Meta setup
+
+Create a Meta Business app and configure these products:
+
+1. Instagram API with Instagram Login. Add the exact `INSTAGRAM_REDIRECT_URI` and request `instagram_business_basic` and `instagram_business_content_publish`.
+2. Facebook Login for Business. Add the exact `FACEBOOK_REDIRECT_URI` and request `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`.
+3. Add development users as app roles/testers. Complete App Review and request Advanced Access before allowing arbitrary production users.
+
+Instagram publishing works only for professional Business/Creator accounts. Facebook publishing works only for Pages the user can manage. The UI reports those restrictions and prompts users to reconnect expired or revoked accounts.
+
+## Local development
+
+Use Python 3.11 or newer. The pinned runtime also provides Windows wheels for Python 3.14.
+
+Install and run FastAPI:
 
 ```powershell
-cd ..\sparkle-backend
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
-If PyTorch needs to be installed explicitly for CPU usage:
+Install and run Next.js in another terminal:
 
 ```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-```
-
-## Running Locally
-
-Start the FastAPI backend:
-
-```powershell
-cd sparkle-backend
-.\venv\Scripts\Activate.ps1
-uvicorn main:app --reload --port 8000
-```
-
-Open the backend docs at:
-
-```text
-http://localhost:8000/docs
-```
-
-Start the Next.js frontend in a second terminal:
-
-```powershell
-cd sparkle-ai
+npm install
 npm run dev
 ```
 
-Open the app at:
+Open `http://localhost:3000`, sign in, generate content, and use **Post to social media**. Meta cannot fetch media from localhost, but it can fetch the short-lived HTTPS URL generated from Supabase Storage.
 
-```text
-http://localhost:3000
-```
+## API
 
-On first startup, the backend downloads and caches the BLIP model. Local text-generation fallback can also download a TinyLlama model if `HF_TOKEN` is not configured.
+All application endpoints except OAuth callbacks require a Clerk bearer token.
 
-## Usage
-
-1. Sign up or sign in through Clerk.
-2. Open the dashboard.
-3. Upload a product image.
-4. Select a platform and tone.
-5. Generate content.
-6. Copy individual fields, copy the full output, revisit history, or export saved generations.
-
-## API Overview
-
-### Backend
-
-| Method | Endpoint | Description |
+| Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Backend health check |
-| `POST` | `/generate` | Generate marketing content from an uploaded product image |
-| `GET` | `/history` | Fetch generation history, newest first |
-| `DELETE` | `/history/{record_id}` | Delete one history record |
-| `GET` | `/export/csv` | Export history as English CSV |
-| `GET` | `/export/csv/{lang}` | Export CSV in `en`, `fr`, `ar`, or `es` |
-| `GET` | `/export/excel` | Export history as English Excel |
-| `GET` | `/export/excel/{lang}` | Export Excel in `en`, `fr`, `ar`, or `es` |
-| `GET` | `/export/zip` | Export history as a ZIP archive |
+| `POST` | `/generate` | Generate and persist content and images |
+| `GET` | `/social/accounts` | List connected accounts |
+| `POST` | `/social/accounts/{provider}/connect` | Start OAuth |
+| `GET` | `/social/oauth/{provider}/callback` | Complete OAuth securely |
+| `GET` | `/social/accounts/facebook/pages` | List selectable Pages after OAuth |
+| `POST` | `/social/accounts/facebook/select-page` | Save a selected Page |
+| `DELETE` | `/social/accounts/{id}` | Revoke and disconnect an account |
+| `POST` | `/social/publish` | Create an idempotent publishing job |
+| `GET` | `/social/publish/{id}` | Read publishing status |
+| `GET` | `/social/publish-history` | List recent publishing attempts |
 
-### Generate Request
-
-`POST /generate` expects `multipart/form-data`.
-
-| Field | Type | Required | Values |
-| --- | --- | --- | --- |
-| `image` | File | Yes | JPG, PNG, WEBP, GIF up to 10 MB |
-| `platform` | String | No | `instagram`, `facebook`, `tiktok`, `ecommerce` |
-| `tone` | String | No | `professional`, `luxury`, `friendly`, `trendy`, `playful`, `minimalist` |
-
-Example response:
-
-```json
-{
-  "headline": "Black Slim-Fit Joggers With White Logo",
-  "description": "A concise product description tailored to the selected tone.",
-  "social_caption": "Platform-ready social copy with a strong hook.",
-  "cta": "Shop now while this style is available.",
-  "hashtags": ["#OOTD", "#NewArrival", "#ShopNow"],
-  "platform": "instagram",
-  "detected_caption": "black pants with white logo",
-  "image_url": "https://your-project.supabase.co/storage/v1/object/public/product-images/...",
-  "record_id": "uuid"
-}
-```
-
-## Frontend Proxy Routes
-
-The Next.js app exposes authenticated proxy routes under `/api`:
-
-| Route | Backend Target |
-| --- | --- |
-| `POST /api/generate` | `POST /generate` |
-| `GET /api/history` | `GET /history` |
-| `DELETE /api/history/{id}` | `DELETE /history/{id}` |
-| `GET /api/export/*` | `GET /export/*` |
-
-These routes require a Clerk session and keep backend calls centralized through `FASTAPI_URL`.
-
-## Testing
-
-Run backend tests:
+## Verification
 
 ```powershell
-cd sparkle-backend
-.\venv\Scripts\Activate.ps1
-pytest tests -v
-```
-
-Run frontend linting:
-
-```powershell
-cd sparkle-ai
 npm run lint
-```
-
-Build the frontend:
-
-```powershell
-cd sparkle-ai
+npm test
 npm run build
+
+cd backend
+pytest -q
 ```
 
-## Notes for Development
+Provider tests mock Meta HTTP responses; a real end-to-end publish requires configured Meta app credentials, approved/test accounts, Clerk, and Supabase.
 
-- The backend uses Supabase REST APIs directly through `httpx`, not the Supabase Python SDK.
-- Image upload and database persistence are designed to be non-fatal where possible, so generation can still return content if storage persistence fails.
-- `HF_TOKEN` is recommended. Without it, the backend falls back to local CPU inference, which can be significantly slower.
-- Next.js generation proxy timeout is configured for long-running AI inference.
+## Extending providers
 
-## License
-
-MIT. Free to use, modify, and distribute.
+New platforms implement `SocialMediaProvider` in `backend/app/providers/`. OAuth, account discovery, publishing, refresh, revocation, and normalized errors remain behind that interface, so LinkedIn, TikTok, or X can reuse the existing account, job, history, and UI contracts.

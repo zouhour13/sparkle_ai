@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SignOutButton, useUser } from "@clerk/nextjs";
+import { SignOutButton, useAuth, useUser } from "@clerk/nextjs";
+import SocialPublisher from "../components/SocialPublisher";
 
 /* ─── Types ─── */
 interface GeneratedContent {
@@ -12,6 +13,8 @@ interface GeneratedContent {
   caption: string;
   cta: string;
   hashtags: string[];
+  record_id?: string;
+  image_url?: string;
 }
 
 interface HistoryItem {
@@ -36,6 +39,28 @@ const RESULT_LABELS: { key: keyof GeneratedContent; icon: string; label: string;
   { key: "hashtags",    icon: "#️⃣", label: "Hashtags",            color: "from-green-500/10 to-transparent" },
 ];
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back for browsers that block the Clipboard API in this context.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return copied;
+}
+
 /* ─── Skeleton loader ─── */
 function SkeletonCard() {
   return (
@@ -51,9 +76,10 @@ function SkeletonCard() {
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (await copyText(text)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
   return (
     <button
@@ -75,6 +101,7 @@ function CopyButton({ text }: { text: string }) {
 export default function DashboardPage() {
   const { theme, setTheme } = useTheme();
   const { user } = useUser();
+  const { getToken } = useAuth();
   const [mounted, setMounted] = useState(false);
 
   /* Generator state */
@@ -87,10 +114,13 @@ export default function DashboardPage() {
   const [result, setResult] = useState<GeneratedContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [copyAllStatus, setCopyAllStatus] = useState<"idle" | "copied" | "failed">("idle");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const resultSectionRef = useRef<HTMLDivElement>(null);
 
   /* History */
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
 
   /* Sidebar */
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -98,7 +128,20 @@ export default function DashboardPage() {
   useEffect(() => {
     setMounted(true);
     const saved = localStorage.getItem("sparkle_history");
-    if (saved) setHistory(JSON.parse(saved));
+    if (!saved) return;
+    try {
+      const savedHistory = JSON.parse(saved) as HistoryItem[];
+      setHistory(savedHistory);
+      const restoredItem = savedHistory.find(
+        (item) => item.result.record_id && item.result.image_url
+      ) ?? savedHistory[0];
+      if (restoredItem) {
+        setResult(restoredItem.result);
+        setSelectedHistoryId(restoredItem.id);
+      }
+    } catch {
+      localStorage.removeItem("sparkle_history");
+    }
   }, []);
 
   /* ── Image upload ── */
@@ -130,6 +173,35 @@ export default function DashboardPage() {
     if (f) handleFile(f);
   };
 
+  const viewHistoryItem = (item: HistoryItem) => {
+    setResult(item.result);
+    setSelectedHistoryId(item.id);
+    requestAnimationFrame(() => {
+      resultSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const deleteHistoryItem = (id: string) => {
+    const updated = history.filter((item) => item.id !== id);
+    setHistory(updated);
+    localStorage.setItem("sparkle_history", JSON.stringify(updated));
+    if (selectedHistoryId === id) {
+      setSelectedHistoryId(null);
+      setResult(null);
+    }
+  };
+
+  const handleCopyAll = async () => {
+    if (!result) return;
+    const all = RESULT_LABELS.map(({ label, key }) => {
+      const value = result[key];
+      return `${label}:\n${Array.isArray(value) ? value.join(" ") : value}`;
+    }).join("\n\n");
+    const copied = await copyText(all);
+    setCopyAllStatus(copied ? "copied" : "failed");
+    setTimeout(() => setCopyAllStatus("idle"), 2500);
+  };
+
   /* ── Generate ── */
   const handleGenerate = async () => {
     if (!file) { setError("Please upload a product image first."); return; }
@@ -144,18 +216,25 @@ export default function DashboardPage() {
       form.append("tone", tone.toLowerCase());
       form.append("language", language.toLowerCase());
 
-      const res = await fetch("/api/generate", { method: "POST", body: form });
+      const token = await getToken();
+      if (!token) throw new Error("Your session has expired. Please sign in again.");
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        body: form,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Server error ${res.status}`);
       }
       const data: GeneratedContent = await res.json();
       setResult(data);
+      setSelectedHistoryId(null);
 
       /* Save to history */
       const newItem: HistoryItem = {
         id: Date.now().toString(),
-        imagePreview: image!,
+        imagePreview: data.image_url || image!,
         platform,
         tone,
         result: data,
@@ -420,23 +499,17 @@ export default function DashboardPage() {
 
         {/* ── RESULTS ── */}
         {(loading || result) && (
-          <div className="mb-10">
+          <div ref={resultSectionRef} className="mb-10" tabIndex={-1}>
             <div className="flex items-center gap-3 mb-6">
               <h2 className="text-xl font-bold">
                 {loading ? "Generating..." : "Your Content is Ready ✨"}
               </h2>
               {!loading && result && (
                 <button
-                  onClick={() => {
-                    const all = RESULT_LABELS.map(({ label, key }) => {
-                      const val = result![key];
-                      return `${label}:\n${Array.isArray(val) ? val.join(" ") : val}`;
-                    }).join("\n\n");
-                    navigator.clipboard.writeText(all);
-                  }}
+                  onClick={handleCopyAll}
                   className="ml-auto btn-secondary text-sm py-2 px-4"
                 >
-                  📋 Copy All
+                  {copyAllStatus === "copied" ? "✓ Copied all" : copyAllStatus === "failed" ? "Copy failed" : "📋 Copy All"}
                 </button>
               )}
             </div>
@@ -477,6 +550,17 @@ export default function DashboardPage() {
                 ) : null
               ))}
             </div>
+            {!loading && result && (
+              <>
+                {result.record_id && result.image_url && (
+                  <p className="mt-5 flex items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-300" role="status">
+                    <span aria-hidden="true">✓</span>
+                    Photo and generated content saved to private storage.
+                  </p>
+                )}
+                <SocialPublisher content={result} imagePreview={image || result.image_url || ""} />
+              </>
+            )}
           </div>
         )}
 
@@ -487,24 +571,43 @@ export default function DashboardPage() {
               <span>📜</span> Recent Generations
             </h2>
             <div className="space-y-3">
-              {history.slice(0, 5).map((item) => (
+              {history.map((item) => (
                 <div
                   key={item.id}
-                  className="flex items-center gap-4 p-4 rounded-xl border border-gray-100 dark:border-white/5 hover:border-purple-500/20 transition-all cursor-pointer"
-                  onClick={() => setResult(item.result)}
+                  className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
+                    selectedHistoryId === item.id
+                      ? "border-purple-500/50 bg-purple-500/10"
+                      : "border-gray-100 dark:border-white/5 hover:border-purple-500/20"
+                  }`}
                 >
-                  <img
-                    src={item.imagePreview}
-                    alt="product"
-                    className="w-12 h-12 rounded-xl object-cover border border-white/10"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">{item.result.title}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {item.platform} · {item.tone} · {item.createdAt}
-                    </p>
-                  </div>
-                  <span className="text-xs text-purple-400 font-medium shrink-0">View →</span>
+                  <button
+                    type="button"
+                    onClick={() => viewHistoryItem(item)}
+                    className="flex min-w-0 flex-1 items-center gap-4 text-left"
+                    aria-label={`View generation: ${item.result.title}`}
+                  >
+                    <img
+                      src={item.imagePreview}
+                      alt="product"
+                      className="w-12 h-12 rounded-xl object-cover border border-white/10"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate">{item.result.title}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {item.platform} · {item.tone} · {item.createdAt}
+                      </p>
+                    </div>
+                    <span className="text-xs text-purple-400 font-medium shrink-0">View →</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteHistoryItem(item.id)}
+                    className="shrink-0 p-2 text-sm text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                    aria-label={`Delete generation: ${item.result.title}`}
+                    title="Delete generation"
+                  >
+                    🗑️
+                  </button>
                 </div>
               ))}
             </div>
