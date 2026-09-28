@@ -1,113 +1,167 @@
 # Sparkle AI
 
-Sparkle AI turns product photos into marketing copy and can publish the generated image, caption, and hashtags to Instagram professional accounts and Facebook Pages.
+Sparkle AI turns a product photo into ready-to-publish marketing content. It generates copy, stores the generated product image and history durably in Supabase, and can publish a single-image post to an Instagram professional account or a Facebook Page.
+
+## What It Does
+
+- Generates product marketing copy from a prompt and image.
+- Keeps product images and generated content history after the browser, app, or local server is closed.
+- Connects Instagram Business or Creator accounts and Facebook Pages through Meta OAuth.
+- Publishes image, caption, and hashtags through the connected social account.
+- Lets users review generated content, publishing history, and connected accounts from the dashboard.
 
 ## Architecture
 
-- `app/`: Next.js 16 frontend, Clerk authentication, and authenticated backend proxies.
-- `backend/app/`: FastAPI generation, OAuth, account management, and publishing API.
-- `backend/supabase/migrations/`: Postgres schema, RLS lockdown, and private Storage bucket setup.
-- Clerk is the only user identity provider. FastAPI validates Clerk session JWTs.
-- Supabase is accessed only by FastAPI with a server-side service key. Meta tokens are encrypted before storage.
+| Component | Technology | Responsibility |
+| --- | --- | --- |
+| Web application | Next.js 16 | Dashboard, Clerk session handling, and authenticated requests to the API |
+| API | FastAPI | Content generation, media persistence, OAuth, account management, and publishing |
+| Identity | Clerk | User sign-in and bearer-token authentication |
+| Persistence | Supabase Postgres and Storage | Generated-content records, publishing records, encrypted social tokens, and product images |
+| Social publishing | Meta Graph API | Instagram professional-account and Facebook Page publishing |
 
-## Supported publishing
+The frontend never accesses Supabase with privileged credentials. FastAPI validates the Clerk token, scopes records to that verified user, and uses the server-only Supabase key to access the private Storage bucket. This keeps generated images available across restarts without making the bucket public.
 
-- Instagram Business and Creator accounts through Instagram Login.
-- Facebook Pages for which the connected user has the `CREATE_CONTENT` task.
-- Single-image posts. Instagram images are normalized to JPEG and served to Meta through a short-lived Supabase signed URL.
+## Prerequisites
 
-Personal Instagram accounts, Facebook personal profiles, carousels, Reels, Stories, and scheduling are not supported in this release.
+- Node.js 22 or newer
+- Python 3.11 or newer
+- A Clerk application
+- A Supabase project
+- A Meta Business app for social publishing
+- Docker Desktop, optionally, for containerized deployment
 
-## Configuration
+## Quick Start
 
-Copy `.env.example` to `.env.local` for Next.js. Copy `backend/.env.example` to `backend/.env` for FastAPI.
+1. Create environment files from the templates:
 
-Generate the token encryption key once and keep it stable and secret:
+   ```powershell
+   Copy-Item .env.example .env.local
+   Copy-Item backend/.env.example backend/.env
+   ```
 
-```powershell
-python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
-```
+2. Set the required Clerk, Supabase, and Meta values. Details are listed in [Environment Configuration](#environment-configuration).
 
-Never expose `SUPABASE_SERVICE_KEY`, `SOCIAL_TOKEN_ENCRYPTION_KEY`, Meta app secrets, or access tokens through `NEXT_PUBLIC_*` variables.
+3. Generate a token-encryption key once. Keep the value unchanged after social accounts have been connected, or stored provider tokens cannot be decrypted.
 
-## Supabase setup
+   ```powershell
+   python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+   ```
 
-Apply `backend/supabase/migrations/202609220001_social_publishing.sql` to the target Supabase project. It creates:
+4. Apply the Supabase migration described in [Supabase Setup](#supabase-setup).
 
-- `generated_content`
-- `social_accounts`
-- `oauth_states`
-- `social_publish_jobs`
+5. Start the API:
+
+   ```powershell
+   cd backend
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --port 8000
+   ```
+
+6. In a second terminal, start the web application:
+
+   ```powershell
+   npm install
+   npm run dev
+   ```
+
+Open `http://localhost:3000` and sign in.
+
+## Supabase Setup
+
+Run [`backend/supabase/migrations/202609220001_social_publishing.sql`](backend/supabase/migrations/202609220001_social_publishing.sql) in the Supabase SQL Editor for the target project. The migration creates:
+
+- `generated_content` for saved content and image metadata
+- `social_accounts` for encrypted OAuth tokens and connected-account metadata
+- `oauth_states` for short-lived OAuth state validation
+- `social_publish_jobs` for idempotent publishing jobs and their outcomes
 - A private `product-images` Storage bucket
 
-The migration enables RLS and revokes browser-role access. The application backend additionally filters every record by the verified Clerk user ID.
+The migration enables Row Level Security and removes direct browser-role access. Storage policies are based on Supabase RLS, while the backend's service key is deliberately restricted to FastAPI. See the official [Supabase Storage access-control documentation](https://supabase.com/docs/guides/storage/security/access-control) for the underlying model.
 
-## Meta setup
+Product images are stored in Supabase, not in temporary browser or Docker storage. They remain available after an app restart, provided the same Supabase project and bucket configuration are used.
 
-Create a Meta Business app and configure these products:
+## Environment Configuration
 
-1. Instagram API with Instagram Login. Add the exact `INSTAGRAM_REDIRECT_URI` and request `instagram_business_basic` and `instagram_business_content_publish`.
-2. Facebook Login for Business. Add the exact `FACEBOOK_REDIRECT_URI` and request `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`.
-3. Add development users as app roles/testers. Complete App Review and request Advanced Access before allowing arbitrary production users.
+Use the checked-in templates as the source of truth:
 
-Instagram publishing works only for professional Business/Creator accounts. Facebook publishing works only for Pages the user can manage. The UI reports those restrictions and prompts users to reconnect expired or revoked accounts.
+- [`.env.example`](.env.example) for the Next.js application
+- [`backend/.env.example`](backend/.env.example) for FastAPI
 
-## Local development
+| Variable group | Where | Notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_CLERK_*` | `.env.local` | Browser-safe Clerk configuration only |
+| `CLERK_SECRET_KEY`, `FASTAPI_URL` | `.env.local` | Server-side Next.js configuration |
+| `CLERK_ISSUER_URL`, `CLERK_JWKS_URL` | `backend/.env` | Lets FastAPI verify Clerk JWTs |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_STORAGE_BUCKET` | `backend/.env` | Persistent data and image storage; service key is backend-only |
+| `SOCIAL_TOKEN_ENCRYPTION_KEY` | `backend/.env` | Stable secret used to encrypt saved provider tokens |
+| `INSTAGRAM_*`, `FACEBOOK_*`, `META_GRAPH_API_VERSION` | `backend/.env` | Meta OAuth and publishing configuration |
+| `FRONTEND_URL` and provider redirect URIs | `backend/.env` | Must match the public deployment URL in production |
+| `HF_*` | `backend/.env` | Optional Hugging Face generation configuration |
 
-Use Python 3.11 or newer. The pinned runtime also provides Windows wheels for Python 3.14.
+Never commit real environment files or expose `SUPABASE_SERVICE_KEY`, `SOCIAL_TOKEN_ENCRYPTION_KEY`, Clerk secret keys, Meta app secrets, or provider access tokens with a `NEXT_PUBLIC_` prefix.
 
-Install and run FastAPI:
+## Meta OAuth and Publishing
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
+Configure a Meta Business app with the following products and exact redirect URLs:
 
-Install and run Next.js in another terminal:
+| Provider | Product | Required redirect URI | Required permissions |
+| --- | --- | --- | --- |
+| Instagram | Instagram API with Instagram Login | `INSTAGRAM_REDIRECT_URI` | `instagram_business_basic`, `instagram_business_content_publish` |
+| Facebook | Facebook Login for Business | `FACEBOOK_REDIRECT_URI` | `pages_show_list`, `pages_read_engagement`, `pages_manage_posts` |
 
-```powershell
-npm install
-npm run dev
-```
+Instagram publishing supports professional Business and Creator accounts. Facebook publishing supports Pages that the connected user can manage and for which the account has the required Page task. Personal Instagram accounts and Facebook profiles are not supported.
 
-Open `http://localhost:3000`, sign in, generate content, and use **Post to social media**. Meta cannot fetch media from localhost, but it can fetch the short-lived HTTPS URL generated from Supabase Storage.
+For local development, Meta needs a publicly reachable HTTPS callback URL; `localhost` cannot receive Meta's callback. A tunnel can work while developing, but it is temporary. For reliable publishing, deploy the application and register the exact deployed HTTPS callback URLs in both Meta and `backend/.env`. Restarting or changing a tunnel URL requires updating both places before reconnecting.
 
-## Docker
+OAuth state is intentionally single-use and short-lived. Start a fresh connection from the dashboard if a callback reports that the request expired or was already used. Reconnecting does not remove the existing connected account unless you explicitly disconnect it or connect a different account.
 
-Docker runs the Next.js frontend and FastAPI backend together; Supabase remains the managed database and Storage service.
+## Docker Deployment
 
-1. Copy `.env.example` to `.env.local` and `backend/.env.example` to `backend/.env`, then set the real credentials.
-2. Start the stack, making the browser-safe Clerk values available for the frontend build:
+Docker runs the frontend and API together. Supabase remains a managed external database and Storage service, so your images persist independently of the containers.
 
-```powershell
-docker compose --env-file .env.local up --build
-```
+1. Configure `.env.local` and `backend/.env` as described above.
+2. Build and run the stack:
 
-Open `http://localhost:3000`. The frontend calls the backend over Docker's internal `backend:8000` network address, while port `8000` is also exposed for the OAuth callback during local testing.
+   ```powershell
+   docker compose --env-file .env.local up --build
+   ```
 
-For Instagram or Facebook OAuth in a deployed environment, set `FRONTEND_URL`, `INSTAGRAM_REDIRECT_URI`, and `FACEBOOK_REDIRECT_URI` in `backend/.env` to your public HTTPS domain and register those exact callback URLs with Meta. A temporary tunnel can be used locally, but a deployed HTTPS domain is required for reliable publishing.
+3. Open `http://localhost:3000`.
 
-## API
+The frontend reaches the API over Docker's internal `backend:8000` address. Port `8000` is exposed for local diagnostics and OAuth development. Before deploying publicly, set `FRONTEND_URL`, `INSTAGRAM_REDIRECT_URI`, and `FACEBOOK_REDIRECT_URI` to the production HTTPS domain, then rebuild and redeploy.
 
-All application endpoints except OAuth callbacks require a Clerk bearer token.
+## API Reference
+
+Except for OAuth callbacks and `GET /health`, application endpoints require a Clerk bearer token.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/generate` | Generate and persist content and images |
-| `GET` | `/social/accounts` | List connected accounts |
-| `POST` | `/social/accounts/{provider}/connect` | Start OAuth |
-| `GET` | `/social/oauth/{provider}/callback` | Complete OAuth securely |
-| `GET` | `/social/accounts/facebook/pages` | List selectable Pages after OAuth |
-| `POST` | `/social/accounts/facebook/select-page` | Save a selected Page |
-| `DELETE` | `/social/accounts/{id}` | Revoke and disconnect an account |
-| `POST` | `/social/publish` | Create an idempotent publishing job |
-| `GET` | `/social/publish/{id}` | Read publishing status |
-| `GET` | `/social/publish-history` | List recent publishing attempts |
+| `GET` | `/health` | Health check |
+| `POST` | `/generate` | Generate and persist content and product media |
+| `GET` | `/history` | List saved generated content |
+| `DELETE` | `/history/{record_id}` | Remove a saved generated-content record |
+| `GET` | `/social/accounts` | List connected social accounts |
+| `POST` | `/social/accounts/{provider}/connect` | Start provider OAuth |
+| `GET` | `/social/oauth/{provider}/callback` | Complete OAuth after Meta redirects back |
+| `GET` | `/social/accounts/facebook/pages` | List selectable Facebook Pages |
+| `POST` | `/social/accounts/facebook/select-page` | Save a selected Facebook Page |
+| `DELETE` | `/social/accounts/{account_id}` | Disconnect an account |
+| `POST` | `/social/publish` | Create an idempotent publish job |
+| `GET` | `/social/publish/{job_id}` | Read one publish job's status |
+| `GET` | `/social/publish-history` | List recent publish attempts |
+
+## Supported Scope
+
+This release supports single-image feed posts to Instagram professional accounts and Facebook Pages. It does not currently support personal accounts, carousels, Reels, Stories, scheduled publishing, or other networks.
+
+Additional providers can implement `SocialMediaProvider` in `backend/app/providers/`. The shared account, OAuth, publishing-job, history, encryption, and error contracts can then be reused.
 
 ## Verification
+
+Run these checks before releasing changes:
 
 ```powershell
 npm run lint
@@ -118,8 +172,4 @@ cd backend
 pytest -q
 ```
 
-Provider tests mock Meta HTTP responses; a real end-to-end publish requires configured Meta app credentials, approved/test accounts, Clerk, and Supabase.
-
-## Extending providers
-
-New platforms implement `SocialMediaProvider` in `backend/app/providers/`. OAuth, account discovery, publishing, refresh, revocation, and normalized errors remain behind that interface, so LinkedIn, TikTok, or X can reuse the existing account, job, history, and UI contracts.
+Provider tests mock external Meta responses. A live publish additionally requires configured and approved Meta credentials, a test or production social account, Clerk, and Supabase.
