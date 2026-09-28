@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SignOutButton, useAuth, useUser } from "@clerk/nextjs";
+import { useAuth, useClerk, useUser } from "@clerk/nextjs";
 import SocialPublisher from "../components/SocialPublisher";
 
 /* ─── Types ─── */
@@ -111,6 +111,7 @@ export default function DashboardPage() {
   const { theme, setTheme } = useTheme();
   const { user } = useUser();
   const { getToken } = useAuth();
+  const { signOut } = useClerk();
   const [mounted, setMounted] = useState(false);
 
   /* Generator state */
@@ -120,6 +121,7 @@ export default function DashboardPage() {
   const [tone, setTone] = useState("Professional");
   const [language, setLanguage] = useState("English");
   const [loading, setLoading] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [result, setResult] = useState<GeneratedContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -267,6 +269,17 @@ export default function DashboardPage() {
     setTimeout(() => setCopyAllStatus("idle"), 2500);
   };
 
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await signOut({ redirectUrl: "/login" });
+    } catch {
+      setSigningOut(false);
+      setError("Could not sign out. Please try again.");
+    }
+  };
+
   /* ── Generate ── */
   const handleGenerate = async () => {
     if (!file) { setError("Please upload a product image first."); return; }
@@ -385,11 +398,14 @@ export default function DashboardPage() {
         </nav>
 
         {/* Logout */}
-        <SignOutButton redirectUrl="/login">
-          <button className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-red-400 hover:bg-red-500/10 transition-all w-full mt-4">
-            <span>🚪</span> Sign Out
-          </button>
-        </SignOutButton>
+        <button
+          type="button"
+          onClick={() => void handleSignOut()}
+          disabled={signingOut}
+          className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-red-400 hover:bg-red-500/10 transition-all w-full mt-4 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span>🚪</span> {signingOut ? "Signing out..." : "Sign Out"}
+        </button>
       </aside>
 
       {/* Sidebar overlay on mobile */}
