@@ -2,6 +2,10 @@
 
 Sparkle AI turns a product photo into ready-to-publish marketing content. It generates copy, stores the generated product image and history durably in Supabase, and can publish a single-image post to an Instagram professional account or a Facebook Page.
 
+## Demo
+
+[Watch the Sparkle AI product demo](assets/sparkai.mp4)
+
 ## What It Does
 
 - Generates product marketing copy from a prompt and image.
