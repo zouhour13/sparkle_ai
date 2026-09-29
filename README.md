@@ -4,7 +4,9 @@ Sparkle AI turns a product photo into ready-to-publish marketing content. It gen
 
 ## Demo
 
-[Watch the Sparkle AI product demo](assets/sparkai.mp4)
+[![Watch the Sparkle AI product demo on YouTube](https://img.youtube.com/vi/rMe9cmW_wwI/maxresdefault.jpg)](https://youtu.be/rMe9cmW_wwI)
+
+Watch the [Sparkle AI product demo on YouTube](https://youtu.be/rMe9cmW_wwI).
 
 ## What It Does
 
